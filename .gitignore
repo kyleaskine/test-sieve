@@ -1,0 +1,6 @@
+# Job input files
+input.job
+result.job
+
+# Pattern to catch any gnfs-lasieve executables
+gnfs-lasieve*
