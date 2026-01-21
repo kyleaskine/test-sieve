@@ -4,3 +4,7 @@ result.job
 
 # Pattern to catch any gnfs-lasieve executables
 gnfs-lasieve*
+
+#output files
+log.*
+output.*
