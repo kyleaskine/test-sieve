@@ -8,7 +8,7 @@ Tools for testing and optimizing GNFS (General Number Field Sieve) sieving param
 
 1. **GGNFS binaries**: You need compiled versions of the GGNFS lattice sievers
    - Required versions: `gnfs-lasieve4I14e`, `gnfs-lasieve4I15e`, `gnfs-lasieve4I16e`
-   - Build from source: [GGNFS on SourceForge](https://sourceforge.net/projects/ggnfs/)
+   - Build from source: [lasieve in YAFU on GitHub](https://github.com/bbuhrow/yafu)
    - Copy the compiled binaries into this directory
 
 2. **Job file**: Create an `input.job` file containing your polynomial and sieve parameters
