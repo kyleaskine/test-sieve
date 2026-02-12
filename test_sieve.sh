@@ -202,6 +202,7 @@ printf "%-12s %-8s %-8s %-12s %-15s\n" "q0" "yield" "n-yld" "exp_rel" "speed"
 prev_nyld=""
 prev_q0=""
 total_exp_rel=0
+total_time=0
 
 for i in "${!q0_array[@]}"; do
     q0="${q0_array[$i]}"
@@ -225,6 +226,10 @@ for i in "${!q0_array[@]}"; do
         q0_diff=$((q0 - prev_q0))
         exp_rel=$(echo "scale=0; $avg_nyld * $q0_diff / $qintsize" | bc -l)
         total_exp_rel=$(echo "scale=0; $total_exp_rel + $exp_rel" | bc -l)
+        if [ "$(echo "$speed_relsec > 0" | bc -l)" -eq 1 ]; then
+            seg_time=$(echo "scale=6; $exp_rel / $speed_relsec" | bc -l)
+            total_time=$(echo "scale=6; $total_time + $seg_time" | bc -l)
+        fi
     else
         exp_rel=""
     fi
@@ -246,9 +251,27 @@ for i in "${!q0_array[@]}"; do
     prev_q0="$q0"
 done
 
-# Print total expected relations
+# Print total expected relations and estimated time
 total_exp_rel_fmt=$(printf "%.0f" "$total_exp_rel")
-printf "%-12s %-8s %-8s %-12s\n" "" "" "Total:" "$total_exp_rel_fmt"
+if [ "$(echo "$total_time > 0" | bc -l)" -eq 1 ]; then
+    avg_speed=$(echo "scale=3; $total_exp_rel / $total_time" | bc -l)
+    avg_speed_fmt=$(printf "%.3f rel/sec" "$avg_speed")
+    # Format total_time into human-readable duration
+    total_time_int=$(printf "%.0f" "$total_time")
+    days=$((total_time_int / 86400))
+    hours=$(( (total_time_int % 86400) / 3600 ))
+    mins=$(( (total_time_int % 3600) / 60 ))
+    if [ "$days" -gt 0 ]; then
+        time_fmt=$(printf "%dd %dh %dm" "$days" "$hours" "$mins")
+    elif [ "$hours" -gt 0 ]; then
+        time_fmt=$(printf "%dh %dm" "$hours" "$mins")
+    else
+        time_fmt=$(printf "%dm" "$mins")
+    fi
+    printf "%-12s %-8s %-8s %-12s %-15s %s\n" "" "" "Total:" "$total_exp_rel_fmt" "$avg_speed_fmt" "ETA: $time_fmt"
+else
+    printf "%-12s %-8s %-8s %-12s\n" "" "" "Total:" "$total_exp_rel_fmt"
+fi
 echo ""
 
 # Create result.job file
