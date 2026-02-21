@@ -5,6 +5,7 @@ Helps determine which side to sieve.
 """
 
 import sys
+import argparse
 from math import log2, sqrt
 
 def parse_job_file(filename):
@@ -82,10 +83,11 @@ def estimate_norms_at_point(params, a, b):
 
     return alg_norm, rat_norm
 
-def estimate_average_norms(params, I_bits=12):
+def estimate_average_norms(params, I_bits=12, q_override=None):
     """
     Estimate average norms across a typical sieve region.
     I_bits: the sieve line size (e.g., 12 for gnfs-lasieve4I12e)
+    q_override: if provided, use this special-q instead of the YAFU heuristic
 
     Uses YAFU's formula for computing representative (a, b) values:
     https://www.mersenneforum.org/showpost.php?p=571762&postcount=3
@@ -94,7 +96,10 @@ def estimate_average_norms(params, I_bits=12):
 
     # YAFU's formula for representative (a, b) at sieve scale
     # From factor/nfs/snfs.c lines 383-385
-    q = 10000.0 * (10.0 ** (I_bits - 11))
+    if q_override is not None:
+        q = float(q_override)
+    else:
+        q = 10000.0 * (10.0 ** (I_bits - 11))
     scale = (1 << (2 * I_bits - 1)) * q
     a_typical = sqrt(scale * skew)
     b_typical = sqrt(scale / skew)
@@ -127,23 +132,26 @@ def estimate_average_norms(params, I_bits=12):
     alg_avg = alg_avg ** (1/len(alg_norms))
     rat_avg = rat_avg ** (1/len(rat_norms))
 
-    return alg_avg, rat_avg, a_typical, b_typical
+    return alg_avg, rat_avg, a_typical, b_typical, q
 
 def main():
-    if len(sys.argv) < 2:
-        filename = "input.job"
-    else:
-        filename = sys.argv[1]
+    parser = argparse.ArgumentParser(description="Estimate algebraic and rational norms for a GNFS/SNFS job file.")
+    parser.add_argument('job_file', nargs='?', default='input.job', help='Job file (default: input.job)')
+    parser.add_argument('--qrange', nargs=2, type=int, metavar=('Q_START_M', 'Q_END_M'),
+                        help='Special-q range in millions (e.g. --qrange 30 230)')
+    parser.add_argument('--siever', type=int, default=16, metavar='I_BITS',
+                        help='Siever I value to use with --qrange (default: 16)')
+    args = parser.parse_args()
+
+    filename = args.job_file
 
     # Check if file exists
     import os
     if not os.path.exists(filename):
-        if len(sys.argv) < 2:
-            print(f"Error: Default file '{filename}' not found!")
+        print(f"Error: File '{filename}' not found!")
+        if filename == 'input.job':
             print("Usage: ./estimate_norms.py [job_file]")
             print("\nCreate an input.job file or specify a different .job file as argument.")
-        else:
-            print(f"Error: File '{filename}' not found!")
         sys.exit(1)
 
     print(f"Parsing job file: {filename}")
@@ -213,11 +221,11 @@ def main():
 
     # Show norms for common siever sizes
     print(f"\n--- Norm Estimates by Siever ---")
-    print(f"{'Siever':<20} {'Alg bits':>10} {'Rat bits':>10} {'Diff':>8} {'Sieve side':<12}")
-    print("-" * 62)
+    print(f"{'Siever':<20} {'q':>10} {'Alg bits':>10} {'Rat bits':>10} {'Diff':>8} {'Sieve side':<12}")
+    print("-" * 72)
 
     for I_bits in [11, 12, 13, 14, 15, 16]:
-        alg_avg, rat_avg, a_typ, b_typ = estimate_average_norms(params, I_bits)
+        alg_avg, rat_avg, a_typ, b_typ, q = estimate_average_norms(params, I_bits)
         alg_bits = log2(alg_avg)
         rat_bits = log2(rat_avg)
         diff = rat_bits - alg_bits
@@ -228,11 +236,30 @@ def main():
             side = "algebraic"
 
         siever_name = f"gnfs-lasieve4I{I_bits}e"
-        print(f"{siever_name:<20} {alg_bits:>10.1f} {rat_bits:>10.1f} {diff:>+8.1f} {side:<12}")
+        q_exp = int(log2(q) / log2(10))
+        q_str = f"1e{q_exp}"
+        print(f"{siever_name:<20} {q_str:>10} {alg_bits:>10.1f} {rat_bits:>10.1f} {diff:>+8.1f} {side:<12}")
+
+    # Q range analysis
+    if args.qrange:
+        q_start = args.qrange[0] * 1_000_000
+        q_end = args.qrange[1] * 1_000_000
+        I_bits = args.siever
+        print(f"\n--- Norm Estimates for Q Range (I={I_bits}) ---")
+        print(f"{'q':>14} {'Alg bits':>10} {'Rat bits':>10} {'Diff':>8} {'Sieve side':<12}")
+        print("-" * 56)
+
+        for q_val in [q_start, q_end]:
+            alg_avg, rat_avg, a_typ, b_typ, q = estimate_average_norms(params, I_bits, q_override=q_val)
+            alg_bits = log2(alg_avg)
+            rat_bits = log2(rat_avg)
+            diff = rat_bits - alg_bits
+            side = "rational" if diff > 0 else "algebraic"
+            print(f"{q_val:>14,} {alg_bits:>10.1f} {rat_bits:>10.1f} {diff:>+8.1f} {side:<12}")
 
     # Detailed analysis for a typical choice
     print(f"\n--- Detailed Analysis (I=15) ---")
-    alg_avg, rat_avg, a_typ, b_typ = estimate_average_norms(params, 15)
+    alg_avg, rat_avg, a_typ, b_typ, _ = estimate_average_norms(params, 15)
     alg_bits = log2(alg_avg)
     rat_bits = log2(rat_avg)
 
