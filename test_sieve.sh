@@ -180,10 +180,10 @@ echo "Side: $side_name"
 echo ""
 
 # Calculate suggested lambdas
-mfbr=$(grep "^mfbr:" "$template" | awk '{print $2}')
-mfba=$(grep "^mfba:" "$template" | awk '{print $2}')
-rlim=$(grep "^rlim:" "$template" | awk '{print $2}')
-alim=$(grep "^alim:" "$template" | awk '{print $2}')
+mfbr=$(grep "^mfbr:" "$template" | tr -d '\r' | awk '{print $2}')
+mfba=$(grep "^mfba:" "$template" | tr -d '\r' | awk '{print $2}')
+rlim=$(grep "^rlim:" "$template" | tr -d '\r' | awk '{print $2}')
+alim=$(grep "^alim:" "$template" | tr -d '\r' | awk '{print $2}')
 
 if [ -n "$mfbr" ] && [ -n "$rlim" ]; then
     rlambda_suggested=$(echo "scale=2; $mfbr / (l($rlim) / l(2))" | bc -l)
