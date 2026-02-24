@@ -8,3 +8,4 @@ gnfs-lasieve*
 #output files
 log.*
 output.*
+*.last_spq0
