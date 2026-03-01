@@ -30,6 +30,15 @@ case "$siever_choice" in
         ;;
 esac
 
+# If siever 16, ask about expanded sieve size
+j_flag=""
+if [ "$siever_choice" = "16" ]; then
+    read -p "Use expanded sieve size (2^16x2^16 instead of 2^16x2^15)? [y/n]: " expand_choice
+    if [ "$expand_choice" = "y" ] || [ "$expand_choice" = "Y" ]; then
+        j_flag="-J 16"
+    fi
+fi
+
 echo "Using $siever"
 echo ""
 
@@ -84,7 +93,7 @@ while [ $current -le $end ]; do
 
     # Run sieve and capture output
     log_file="log.${current_m}M.txt"
-    ./$siever -v -n0 -c $qintsize -f "$current" -o "$output_file" $side_flag "$template" 2>&1 | tee "$log_file"
+    ./$siever -v -n0 $j_flag -c $qintsize -f "$current" -o "$output_file" $side_flag "$template" 2>&1 | tee "$log_file"
 
     # Extract and display summary information
     echo ""
