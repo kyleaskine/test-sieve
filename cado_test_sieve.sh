@@ -113,12 +113,22 @@ echo "Wrote CADO poly file: $polyfile"
 
 # --- Step 2: Generate factor base (algebraic side) ---
 rootsfile="cado_roots1.gz"
-if [ -f "$rootsfile" ]; then
-    echo "Factor base cache found: $rootsfile (skipping makefb)"
-else
+fb_hashfile=".fb_params.sha256"
+fb_hash=$(echo "$n $lim1 $(cat "$polyfile")" | sha256sum | awk '{print $1}')
+regen_fb=false
+if [ ! -f "$rootsfile" ]; then
+    regen_fb=true
+elif [ ! -f "$fb_hashfile" ] || [ "$(cat "$fb_hashfile")" != "$fb_hash" ]; then
+    echo "Factor base cache is stale (poly or lim1 changed), regenerating..."
+    regen_fb=true
+fi
+if [ "$regen_fb" = true ]; then
     echo "Running makefb (lim=$lim1) ..."
     "$MAKEFB" -poly "$polyfile" -lim "$lim1" -out "$rootsfile"
+    echo "$fb_hash" > "$fb_hashfile"
     echo "Factor base written: $rootsfile"
+else
+    echo "Factor base cache valid: $rootsfile (skipping makefb)"
 fi
 echo ""
 

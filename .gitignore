@@ -16,3 +16,4 @@ cado_roots1.gz
 cado_log.*
 cado_out.*
 cado_test_sieve.ini
+.fb_params.sha256
