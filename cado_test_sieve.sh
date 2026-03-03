@@ -7,7 +7,13 @@
 set -euo pipefail
 
 # --- Configuration ---
-CADO_BUILD="${CADO_BUILD:-$HOME/cado-nfs/build/Kyle-PC-V2}"
+INIFILE="cado_test_sieve.ini"
+if [ -f "$INIFILE" ]; then
+    source "$INIFILE"
+else
+    echo "Error: $INIFILE not found. Copy cado_test_sieve.ini.example and edit it."
+    exit 1
+fi
 LAS="$CADO_BUILD/sieve/las"
 MAKEFB="$CADO_BUILD/sieve/makefb"
 
@@ -49,13 +55,20 @@ Y0=$(get_param Y0)
 Y1=$(get_param Y1)
 
 # Collect algebraic coefficients c0..c9 (support degree 5 through 6+)
+# For SNFS, coefficients can be sparse (e.g. c0 and c6 only), so don't break on gaps.
 declare -a ccoeffs=()
+max_deg=-1
 for i in $(seq 0 9); do
     val=$(get_param "c$i")
     if [ -n "$val" ]; then
         ccoeffs[$i]="$val"
-    else
-        break
+        max_deg=$i
+    fi
+done
+# Fill in missing intermediate coefficients as 0
+for i in $(seq 0 "$max_deg"); do
+    if [ -z "${ccoeffs[$i]+x}" ]; then
+        ccoeffs[$i]=0
     fi
 done
 
@@ -125,6 +138,20 @@ esac
 echo "Using -A $A"
 echo ""
 
+read -p "Sieve algebraic (a) or rational (r) side? [a/r]: " side_choice
+case "$side_choice" in
+    r|R)
+        sqside=0
+        side_name="rational"
+        ;;
+    a|A|*)
+        sqside=1
+        side_name="algebraic"
+        ;;
+esac
+echo "Sieving $side_name side (sqside=$sqside)"
+echo ""
+
 read -p "Enter start q (in millions): " start_m
 read -p "Enter end q (in millions): " end_m
 if [ "$start_m" -eq "$end_m" ]; then
@@ -167,7 +194,7 @@ while [ "$current" -le "$end" ]; do
         -lim0 "$lim0" -lim1 "$lim1"
         -lpb0 "$lpb0" -lpb1 "$lpb1"
         -mfb0 "$mfb0" -mfb1 "$mfb1"
-        -A "$A" -sqside 1
+        -A "$A" -sqside "$sqside"
         -bkmult "1,1s:1.2"
         -adjust-strategy 2
         -q0 "$current" -q1 "$q1"

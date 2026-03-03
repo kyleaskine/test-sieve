@@ -1,0 +1,2 @@
+# Path to your CADO-NFS build directory
+CADO_BUILD=/path/to/cado-nfs/build/your-hostname

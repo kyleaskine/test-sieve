@@ -13,5 +13,6 @@ output.*
 # CADO output files
 cado_tmp.poly
 cado_roots1.gz
-cado_log.*.txt
-cado_out.*.txt
+cado_log.*
+cado_out.*
+cado_test_sieve.ini
