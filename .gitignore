@@ -9,3 +9,9 @@ gnfs-lasieve*
 log.*
 output.*
 *.last_spq0
+
+# CADO output files
+cado_tmp.poly
+cado_roots1.gz
+cado_log.*.txt
+cado_out.*.txt
