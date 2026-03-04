@@ -102,7 +102,7 @@ while [ $current -le $end ]; do
     # Extract values
     specq=$(grep "Special q," "$log_file" | tail -1 | grep -oE "[0-9]+" | head -1)
     yield=$(grep "^Total yield:" "$log_file" | grep -oE "[0-9]+")
-    speed=$(grep "sec/rel" "$log_file" | grep -oE "[0-9.]+ sec/rel" | head -1)
+    speed=$(grep "sec/rel" "$log_file" | grep -oE "[0-9.]+ sec/rel" | tail -1)
 
     echo "$specq Special q"
     echo "Total yield: $yield"

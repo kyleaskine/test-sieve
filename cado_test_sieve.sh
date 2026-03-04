@@ -134,16 +134,20 @@ echo ""
 
 # --- Step 3: Interactive prompts ---
 echo "Choose sieve area:"
-echo "  1) -A 29  (I=15, ~500MB)"
-echo "  2) -A 30  (I=15.5, ~1GB)"
-echo "  3) -A 31  (I=16, ~2GB)"
-echo "  4) -A 32  (I=16.5, ~4GB)"
-read -p "Selection [1-4]: " area_choice
+echo "  1) -A 27  (I=14, ~125MB)"
+echo "  2) -A 28  (I=14.5, ~250MB)"
+echo "  3) -A 29  (I=15, ~500MB)"
+echo "  4) -A 30  (I=15.5, ~1GB)"
+echo "  5) -A 31  (I=16, ~2GB)"
+echo "  6) -A 32  (I=16.5, ~4GB)"
+read -p "Selection [1-6]: " area_choice
 case "$area_choice" in
-    1) A=29 ;;
-    2) A=30 ;;
-    3) A=31 ;;
-    4|*) A=32 ;;
+    1) A=27 ;;
+    2) A=28 ;;
+    3) A=29 ;;
+    4) A=30 ;;
+    5) A=31 ;;
+    6|*) A=32 ;;
 esac
 echo "Using -A $A"
 echo ""
