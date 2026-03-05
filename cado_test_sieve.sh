@@ -35,7 +35,7 @@ if [ ! -f "$template" ]; then
 fi
 
 get_param() {
-    grep "^$1:" "$template" | tr -d '\r' | awk '{print $2}' || true
+    grep "^$1:" "$template" | tr -d '\r' | sed 's/[^[:print:]]//g' | awk '{print $2}' || true
 }
 
 # Translate GGNFS → CADO parameter names

@@ -5,6 +5,7 @@ Helps determine which side to sieve.
 """
 
 import sys
+import re
 import argparse
 from math import log2, sqrt
 
@@ -20,6 +21,8 @@ def parse_job_file(filename):
                 key, val = line.split(':', 1)
                 key = key.strip()
                 val = val.strip()
+                # Strip invisible Unicode characters (zero-width spaces, etc.)
+                val = re.sub(r'[^\x20-\x7E]', '', val)
                 try:
                     # Try to parse as number
                     if '.' in val:
