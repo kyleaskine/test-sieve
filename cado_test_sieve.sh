@@ -166,17 +166,44 @@ esac
 echo "Sieving $side_name side (sqside=$sqside)"
 echo ""
 
-read -p "Enter start q (in millions): " start_m
-read -p "Enter end q (in millions): " end_m
-if [ "$start_m" -eq "$end_m" ]; then
-    interval_m=1
+read -p "Two-stage mode? [y/n]: " two_stage_choice
+declare -a q_points=()
+if [ "$two_stage_choice" = "y" ] || [ "$two_stage_choice" = "Y" ]; then
+    read -p "Stage 1 start (millions): " s1_start_m
+    read -p "Stage 1 end (millions): " s1_end_m
+    read -p "Stage 1 interval (millions): " s1_interval_m
+    read -p "Stage 2 end (millions): " s2_end_m
+    read -p "Stage 2 interval (millions): " s2_interval_m
+    cur=$((s1_start_m * 1000000))
+    s1_end=$((s1_end_m * 1000000))
+    s1_interval=$((s1_interval_m * 1000000))
+    s2_interval=$((s2_interval_m * 1000000))
+    while [ "$cur" -le "$s1_end" ]; do
+        q_points+=("$cur")
+        cur=$((cur + s1_interval))
+    done
+    cur=$((s1_end_m * 1000000 + s2_interval))
+    s2_end=$((s2_end_m * 1000000))
+    while [ "$cur" -le "$s2_end" ]; do
+        q_points+=("$cur")
+        cur=$((cur + s2_interval))
+    done
 else
-    read -p "Enter interval (in millions): " interval_m
+    read -p "Enter start q (in millions): " start_m
+    read -p "Enter end q (in millions): " end_m
+    if [ "$start_m" -eq "$end_m" ]; then
+        interval_m=1
+    else
+        read -p "Enter interval (in millions): " interval_m
+    fi
+    cur=$((start_m * 1000000))
+    end_val=$((end_m * 1000000))
+    interval=$((interval_m * 1000000))
+    while [ "$cur" -le "$end_val" ]; do
+        q_points+=("$cur")
+        cur=$((cur + interval))
+    done
 fi
-
-start=$((start_m * 1000000))
-end=$((end_m * 1000000))
-interval=$((interval_m * 1000000))
 qintsize=1000
 
 # --- Step 4: Sieve loop ---
@@ -189,8 +216,7 @@ declare -a speed_array
 declare -a time_array
 
 index=0
-current=$start
-while [ "$current" -le "$end" ]; do
+for current in "${q_points[@]}"; do
     current_m=$((current / 1000000))
     q1=$((current + qintsize))
     outfile="cado_out.${current_m}M.txt"
@@ -300,7 +326,6 @@ while [ "$current" -le "$end" ]; do
     speed_array[$index]=$speed_relsec
     time_array[$index]=$wall_time
 
-    current=$((current + interval))
     index=$((index + 1))
 done
 

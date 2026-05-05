@@ -1,0 +1,549 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>NFS@Home result.job validator</title>
+<style>
+  :root { color-scheme: light; }
+  body {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+    max-width: 960px;
+    margin: 2em auto;
+    padding: 0 1em;
+    color: #222;
+    line-height: 1.4;
+  }
+  h1 { font-size: 1.3em; margin-bottom: 0.3em; }
+  .subtitle { color: #666; margin-top: 0; margin-bottom: 1.5em; }
+  label { display: block; margin: 0.75em 0 0.25em; font-weight: bold; }
+  select, textarea, button { font: inherit; box-sizing: border-box; }
+  select { padding: 0.3em; }
+  textarea { width: 100%; height: 320px; padding: 0.5em; }
+  button { padding: 0.5em 1.2em; margin: 0.75em 0.4em 0.75em 0; cursor: pointer; }
+  .results { margin-top: 1em; }
+  .summary {
+    padding: 0.5em 0.75em;
+    margin-bottom: 0.75em;
+    border-radius: 4px;
+    font-weight: bold;
+  }
+  .summary.ok   { background: #dff5dd; color: #1a5; }
+  .summary.warn { background: #fff5e0; color: #c80; }
+  .summary.bad  { background: #fde8e8; color: #c33; }
+  .check {
+    padding: 0.45em 0.7em;
+    margin: 0.3em 0;
+    border-left: 4px solid #ccc;
+    background: #f7f7f7;
+  }
+  .check.pass { border-color: #2a7; }
+  .check.warn { border-color: #d90; background: #fff5e0; }
+  .check.fail { border-color: #c33; background: #fde8e8; }
+  .check.info { border-color: #69c; background: #eef4fb; }
+  .tag { display: inline-block; min-width: 4.5em; font-weight: bold; margin-right: 0.5em; }
+  .pass .tag { color: #2a7; }
+  .warn .tag { color: #c80; }
+  .fail .tag { color: #c33; }
+  .info .tag { color: #69c; }
+  pre {
+    background: #f0f0f0;
+    padding: 0.5em;
+    margin: 0.4em 0 0;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    font-size: 0.9em;
+  }
+  .fixed-box {
+    background: #e8f5e8;
+    border: 1px solid #2a7;
+    padding: 0.5em;
+    margin-top: 0.5em;
+  }
+  .fixed-box h4 { margin: 0 0 0.3em; font-size: 1em; }
+  small { color: #666; }
+  code { background: #eee; padding: 0 0.2em; border-radius: 2px; }
+  .mark {
+    background: #fde8e8;
+    color: #c33;
+    padding: 0 0.2em;
+    border-radius: 2px;
+    font-weight: bold;
+  }
+</style>
+</head>
+<body>
+<h1>NFS@Home result.job validator</h1>
+<p class="subtitle">ggnfs job-file sanity check before submitting to the NFS@Home queue.</p>
+
+<label for="siever">Siever queue</label>
+<select id="siever">
+  <option value="14e">14e</option>
+  <option value="15e" selected>15e</option>
+  <option value="15es">15es</option>
+  <option value="16es">16es</option>
+</select>
+
+<label for="job">Paste contents of result.job</label>
+<textarea id="job" placeholder="n: 12345...&#10;skew: ...&#10;c0: ...&#10;..." spellcheck="false"></textarea>
+
+<button id="run">Validate</button>
+<button id="clear" type="button">Clear</button>
+
+<div class="results" id="results"></div>
+
+<script>
+'use strict';
+
+const SIEVERS = {
+  '14e':  { limSumMax: 300_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
+  '15e':  { limSumMax: 400_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
+  '15es': { limSumMax: 334_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
+  '16es': { limSumMax: 450_000_000n, lpbMax: 35, lpbMaxIsHard: false }, // no documented sum cap; warn if lpb > 35
+};
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+function describeChar(ch) {
+  const code = ch.codePointAt(0);
+  const hex = 'U+' + code.toString(16).toUpperCase().padStart(4, '0');
+  const named = {
+    0x00A0: 'NO-BREAK SPACE',
+    0x200B: 'ZERO WIDTH SPACE',
+    0x200C: 'ZERO WIDTH NON-JOINER',
+    0x200D: 'ZERO WIDTH JOINER',
+    0x2028: 'LINE SEPARATOR',
+    0x2029: 'PARAGRAPH SEPARATOR',
+    0x2060: 'WORD JOINER',
+    0xFEFF: 'BOM / ZERO WIDTH NO-BREAK SPACE',
+  }[code];
+  return { code, hex, name: named || (code > 127 ? 'non-ASCII' : 'control') };
+}
+
+function isSuspicious(code) {
+  if (code === 0x09 || code === 0x0A || code === 0x0D) return false;
+  if (code >= 0x20 && code <= 0x7E) return false;
+  return true;
+}
+
+function highlightLine(line) {
+  let out = '';
+  for (const ch of line) {
+    const code = ch.codePointAt(0);
+    if (isSuspicious(code)) {
+      out += `<span class="mark">[${describeChar(ch).hex}]</span>`;
+    } else {
+      out += escapeHtml(ch);
+    }
+  }
+  return out;
+}
+
+function modInverse(a, m) {
+  if (m <= 0n) return null;
+  a = ((a % m) + m) % m;
+  let [oldR, r] = [a, m];
+  let [oldS, s] = [1n, 0n];
+  while (r !== 0n) {
+    const q = oldR / r;
+    [oldR, r] = [r, oldR - q * r];
+    [oldS, s] = [s, oldS - q * s];
+  }
+  if (oldR !== 1n) return null;
+  return ((oldS % m) + m) % m;
+}
+
+function evalPolyMod(coeffs, x, mod) {
+  let result = 0n;
+  for (let i = coeffs.length - 1; i >= 0; i--) {
+    result = (result * x + coeffs[i]) % mod;
+  }
+  return ((result % mod) + mod) % mod;
+}
+
+function log2BigInt(n) {
+  if (n <= 0n) return NaN;
+  if (n <= BigInt(Number.MAX_SAFE_INTEGER)) return Math.log2(Number(n));
+  const s = n.toString(2);
+  const take = Math.min(53, s.length);
+  const top = parseInt(s.slice(0, take), 2);
+  return Math.log2(top) + (s.length - take);
+}
+
+function parseKV(line) {
+  const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)([ \t]*):([ \t]*)(.*?)([ \t]*)$/);
+  if (!m) return null;
+  return {
+    key: m[1],
+    preColonWs: m[2],
+    postColonWs: m[3],
+    value: m[4],
+    trailingWs: m[5],
+  };
+}
+
+function buildFixedSkew(originalText, lines, nLineIdx, skewLineIdx) {
+  const usesCRLF = /\r\n/.test(originalText);
+  const eol = usesCRLF ? '\r\n' : '\n';
+  const skewLine = lines[skewLineIdx];
+  const result = [];
+  for (let i = 0; i < lines.length; i++) {
+    if (i === skewLineIdx) continue;
+    result.push(lines[i]);
+    if (i === nLineIdx) result.push(skewLine);
+  }
+  return result.join(eol);
+}
+
+function validate(text, sieverKey) {
+  const checks = [];
+  const add = (level, title, detail) => checks.push({ level, title, detail });
+  const siever = SIEVERS[sieverKey];
+
+  // ── Suspicious characters ──
+  const lines = text.split(/\r?\n/);
+  const susByLine = new Map();
+  let totalSus = 0;
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li];
+    let col = 0;
+    for (const ch of line) {
+      col++;
+      const code = ch.codePointAt(0);
+      if (isSuspicious(code)) {
+        if (!susByLine.has(li + 1)) susByLine.set(li + 1, { lineText: line, hits: [] });
+        susByLine.get(li + 1).hits.push({ col, ch, info: describeChar(ch) });
+        totalSus++;
+      }
+    }
+  }
+  if (totalSus === 0) {
+    add('pass', 'No suspicious characters', 'Only printable ASCII plus tab/LF/CR.');
+  } else {
+    let detail = '';
+    for (const [ln, info] of susByLine) {
+      const hitDescs = info.hits.map(h => `col ${h.col}: ${h.info.hex} (${h.info.name})`).join(', ');
+      detail += `<div>Line ${ln}: ${hitDescs}</div>`;
+      detail += `<pre>${highlightLine(info.lineText)}</pre>`;
+    }
+    add('fail', `Found ${totalSus} suspicious character(s) on ${susByLine.size} line(s)`, detail);
+  }
+
+  if (/\r\n/.test(text)) {
+    add('info', 'CRLF line endings present', 'Accepted by ggnfs; Unix LF is more standard.');
+  }
+
+  // Strip leading BOM from line 0 for parsing
+  if (lines.length && lines[0].charCodeAt(0) === 0xFEFF) lines[0] = lines[0].slice(1);
+
+  const isComment = l => /^\s*#/.test(l);
+  const isBlank = l => /^\s*$/.test(l);
+
+  // ── Parse all key:value lines ──
+  const entries = [];
+  const seenKeys = new Map();
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i];
+    if (isBlank(raw) || isComment(raw)) continue;
+    const parsed = parseKV(raw);
+    if (!parsed) {
+      add('warn', `Unrecognized line ${i + 1}`, `<pre>${escapeHtml(raw)}</pre>`);
+      continue;
+    }
+    entries.push({ lineNo: i + 1, ...parsed, raw });
+    if (!seenKeys.has(parsed.key)) seenKeys.set(parsed.key, []);
+    seenKeys.get(parsed.key).push(i + 1);
+  }
+
+  // ── First non-comment line must be n: ──
+  let firstNonCommentLine = -1;
+  for (let i = 0; i < lines.length; i++) {
+    if (!isBlank(lines[i]) && !isComment(lines[i])) { firstNonCommentLine = i; break; }
+  }
+  if (firstNonCommentLine === -1) {
+    add('fail', 'No content', 'File is empty or all comments/blank lines.');
+    return checks;
+  }
+  const firstParsed = parseKV(lines[firstNonCommentLine]);
+  const firstIsN = firstParsed && firstParsed.key === 'n';
+  if (firstIsN) {
+    add('pass', 'First non-comment line is n:', `Line ${firstNonCommentLine + 1}.`);
+  } else {
+    add('fail', 'First non-comment line is not n:',
+      `Got <pre>${escapeHtml(lines[firstNonCommentLine])}</pre>(line ${firstNonCommentLine + 1})`);
+  }
+
+  // ── Space after colon ──
+  const noSpace = entries.filter(e => e.postColonWs.length === 0);
+  if (noSpace.length === 0) {
+    add('pass', 'All entries have a space after the colon', '');
+  } else {
+    const detail = noSpace.map(e =>
+      `<div>Line ${e.lineNo}: <code>${escapeHtml(e.raw)}</code></div>`).join('');
+    add('fail', `${noSpace.length} entry/entries missing space after colon`, detail);
+  }
+
+  // ── Whitespace before colon ──
+  const preCol = entries.filter(e => e.preColonWs.length > 0);
+  if (preCol.length > 0) {
+    const detail = preCol.map(e =>
+      `<div>Line ${e.lineNo}: <code>${escapeHtml(e.raw)}</code></div>`).join('');
+    add('warn', `${preCol.length} entry/entries have whitespace before colon`, detail);
+  }
+
+  // ── Trailing whitespace ──
+  const tw = entries.filter(e => e.trailingWs.length > 0);
+  if (tw.length > 0) {
+    const detail = tw.map(e =>
+      `<div>Line ${e.lineNo} (key <code>${escapeHtml(e.key)}</code>)</div>`).join('');
+    add('warn', `${tw.length} entry/entries have trailing whitespace`, detail);
+  }
+
+  // ── Duplicate keys ──
+  const dupes = [...seenKeys.entries()].filter(([, ls]) => ls.length > 1);
+  if (dupes.length === 0) {
+    add('pass', 'No duplicate keys', '');
+  } else {
+    const detail = dupes.map(([k, ls]) =>
+      `<div><code>${escapeHtml(k)}</code> on lines ${ls.join(', ')}</div>`).join('');
+    add('fail', `${dupes.length} duplicate key(s)`, detail);
+  }
+
+  // ── Lookup map (first occurrence wins) ──
+  const lookup = {};
+  for (const e of entries) if (!(e.key in lookup)) lookup[e.key] = e;
+  const getNum = (k) => {
+    if (!(k in lookup)) return null;
+    const v = lookup[k].value;
+    return /^-?\d+$/.test(v) ? BigInt(v) : null;
+  };
+  const getFloat = (k) => {
+    if (!(k in lookup)) return null;
+    const v = lookup[k].value;
+    return /^-?\d+(\.\d+)?$/.test(v) ? parseFloat(v) : null;
+  };
+
+  // ── Required fields ──
+  const required = ['n', 'skew', 'Y0', 'Y1', 'rlim', 'alim', 'lpbr', 'lpba', 'mfbr', 'mfba', 'rlambda', 'alambda'];
+  const missing = required.filter(k => !(k in lookup));
+  const cKeys = Object.keys(lookup).filter(k => /^c\d+$/.test(k));
+  if (cKeys.length < 2) missing.push('c0..cN (algebraic poly coefficients)');
+  if (missing.length === 0) {
+    add('pass', 'All required fields present', '');
+  } else {
+    add('fail', `Missing required field(s)`, `<div>${missing.map(escapeHtml).join(', ')}</div>`);
+  }
+
+  // ── skew immediately after n: ──
+  if (firstIsN) {
+    let nextIdx = -1;
+    for (let i = firstNonCommentLine + 1; i < lines.length; i++) {
+      if (!isBlank(lines[i]) && !isComment(lines[i])) { nextIdx = i; break; }
+    }
+    if (nextIdx !== -1) {
+      const nextParsed = parseKV(lines[nextIdx]);
+      if (nextParsed && nextParsed.key === 'skew') {
+        add('pass', 'skew is the next non-comment line after n:', '');
+      } else {
+        const skewEntry = lookup['skew'];
+        if (skewEntry) {
+          const fixed = buildFixedSkew(text, lines, firstNonCommentLine, skewEntry.lineNo - 1);
+          add('warn',
+            'skew is not immediately after n: (msieve prefers it there)',
+            `<div>Suggested fix (skew moved up):</div>
+             <div class="fixed-box">
+               <h4>Fixed version:</h4>
+               <pre>${escapeHtml(fixed)}</pre>
+             </div>`);
+        }
+      }
+    }
+  }
+
+  // ── Sum of lims ──
+  const rlim = getNum('rlim');
+  const alim = getNum('alim');
+  if (rlim !== null && alim !== null) {
+    const sum = rlim + alim;
+    if (siever.limSumMax !== null) {
+      if (sum > siever.limSumMax) {
+        add('fail', `lim sum exceeds ${sieverKey} cap`,
+          `rlim + alim = ${sum.toString()} &gt; ${siever.limSumMax.toString()}`);
+      } else {
+        add('pass', `lim sum within ${sieverKey} cap`,
+          `rlim + alim = ${sum.toString()} ≤ ${siever.limSumMax.toString()}`);
+      }
+    } else {
+      add('info', `${sieverKey} has no documented lim-sum cap`,
+        `rlim + alim = ${sum.toString()}`);
+    }
+  }
+
+  // ── lpb checks ──
+  for (const key of ['lpbr', 'lpba']) {
+    const val = getNum(key);
+    if (val === null) continue;
+    const v = Number(val);
+    if (siever.lpbMaxIsHard) {
+      if (v > siever.lpbMax) {
+        add('fail', `${key} = ${v} exceeds ${sieverKey} max of ${siever.lpbMax}`, '');
+      } else {
+        add('pass', `${key} = ${v} within ${sieverKey} max of ${siever.lpbMax}`, '');
+      }
+    } else {
+      if (v > siever.lpbMax) {
+        add('warn', `${key} = ${v} is unusually high (>${siever.lpbMax}) for ${sieverKey}`, '');
+      } else {
+        add('pass', `${key} = ${v} is reasonable for ${sieverKey}`, '');
+      }
+    }
+  }
+
+  // ── mfb in [lpb*2 - 2, lpb*3 - 3] ──
+  for (const [lpbKey, mfbKey] of [['lpbr', 'mfbr'], ['lpba', 'mfba']]) {
+    const lpb = getNum(lpbKey);
+    const mfb = getNum(mfbKey);
+    if (lpb === null || mfb === null) continue;
+    const lpbN = Number(lpb), mfbN = Number(mfb);
+    const lo = lpbN * 2 - 2;
+    const hi = lpbN * 3 - 3;
+    if (mfbN < lo || mfbN > hi) {
+      add('warn', `${mfbKey} = ${mfbN} outside expected range`,
+        `For ${lpbKey}=${lpbN}, expected [${lo}, ${hi}].`);
+    } else {
+      add('pass', `${mfbKey} = ${mfbN} within expected range [${lo}, ${hi}]`, '');
+    }
+  }
+
+  // ── lambda window: [calc - 0.05, calc + 0.25], calc = mfb / log2(lim) ──
+  for (const [limKey, mfbKey, lambdaKey] of [
+    ['rlim', 'mfbr', 'rlambda'],
+    ['alim', 'mfba', 'alambda'],
+  ]) {
+    const lim = getNum(limKey);
+    const mfb = getNum(mfbKey);
+    const lam = getFloat(lambdaKey);
+    if (lim === null || mfb === null || lam === null) continue;
+    const calc = Number(mfb) / log2BigInt(lim);
+    const lo = calc - 0.05;
+    const hi = calc + 0.25;
+    if (lam < lo || lam > hi) {
+      add('warn', `${lambdaKey} = ${lam} outside expected window`,
+        `Calculated ${lambdaKey} ≈ ${mfbKey}/log2(${limKey}) = ${calc.toFixed(3)}; window [${lo.toFixed(3)}, ${hi.toFixed(3)}].`);
+    } else {
+      add('pass', `${lambdaKey} = ${lam} within expected window`,
+        `Calculated ${calc.toFixed(3)}; window [${lo.toFixed(3)}, ${hi.toFixed(3)}].`);
+    }
+  }
+
+  // ── Sieve side per lss ──
+  const lssEntry = lookup['lss'];
+  if (lssEntry && lssEntry.value === '0') {
+    add('info', 'Sieve side: algebraic', '<code>lss: 0</code> set.');
+  } else if (lssEntry) {
+    add('info', `Sieve side: rational`, `<code>lss: ${escapeHtml(lssEntry.value)}</code> (anything other than 0 = rational).`);
+  } else {
+    add('info', 'Sieve side: rational', 'No <code>lss</code> line — defaults to rational. (For algebraic, add <code>lss: 0</code>.)');
+  }
+
+  // ── Polynomial sanity: m = -Y0 * Y1^-1 mod n, then f(m) ≡ 0 (mod n) ──
+  const n = getNum('n');
+  const Y0 = getNum('Y0');
+  const Y1 = getNum('Y1');
+  if (n !== null && Y0 !== null && Y1 !== null && n > 0n) {
+    const inv = modInverse(Y1, n);
+    if (inv === null) {
+      add('warn', 'Could not compute m', 'Y1 has no inverse mod n (gcd(Y1, n) ≠ 1).');
+    } else {
+      const m = ((-Y0 * inv) % n + n) % n;
+      const cEntries = [];
+      for (const k of Object.keys(lookup)) {
+        const cm = k.match(/^c(\d+)$/);
+        if (cm) {
+          const v = getNum(k);
+          if (v !== null) cEntries.push([parseInt(cm[1], 10), v]);
+        }
+      }
+      const mFmt = m.toString();
+      const mShort = mFmt.length > 80 ? mFmt.slice(0, 80) + '…' : mFmt;
+      let mLineDetail = '';
+      if (lookup['m']) {
+        let mFile = null;
+        try { mFile = BigInt(lookup['m'].value); } catch { /* ignore */ }
+        if (mFile !== null) {
+          const mFileNorm = ((mFile % n) + n) % n;
+          mLineDetail = mFileNorm === m
+            ? ' Matches <code>m:</code> line in file.'
+            : ` <strong>Disagrees</strong> with <code>m:</code> line in file.`;
+        }
+      }
+      if (cEntries.length === 0) {
+        add('info', 'Computed m from Y0, Y1, n',
+          `m = <code>${escapeHtml(mShort)}</code>${mLineDetail}`);
+      } else {
+        const maxIdx = Math.max(...cEntries.map(([i]) => i));
+        const coeffs = new Array(maxIdx + 1).fill(0n);
+        for (const [i, v] of cEntries) coeffs[i] = v;
+        const fm = evalPolyMod(coeffs, m, n);
+        if (fm === 0n) {
+          add('pass', 'Polynomial sanity: f(m) ≡ 0 (mod n)',
+            `m = -Y0/Y1 mod n = <code>${escapeHtml(mShort)}</code>.${mLineDetail}`);
+        } else {
+          add('fail', 'Polynomial sanity FAILED: f(m) ≢ 0 (mod n)',
+            `m = <code>${escapeHtml(mShort)}</code><br>f(m) mod n = <code>${escapeHtml(fm.toString())}</code>${mLineDetail}`);
+        }
+      }
+    }
+  }
+
+  return checks;
+}
+
+function summarize(checks) {
+  let pass = 0, warn = 0, fail = 0, info = 0;
+  for (const c of checks) {
+    if (c.level === 'pass') pass++;
+    else if (c.level === 'warn') warn++;
+    else if (c.level === 'fail') fail++;
+    else info++;
+  }
+  let cls, text;
+  if (fail > 0) { cls = 'bad'; text = `${fail} failure(s) — do not submit`; }
+  else if (warn > 0) { cls = 'warn'; text = `${warn} warning(s) — review before submitting`; }
+  else { cls = 'ok'; text = 'All checks passed'; }
+  return { cls, text, pass, warn, fail, info };
+}
+
+function render(checks) {
+  const sm = summarize(checks);
+  const summaryEl = `<div class="summary ${sm.cls}">
+    ${escapeHtml(sm.text)} &nbsp;<small>(${sm.pass} pass / ${sm.warn} warn / ${sm.fail} fail / ${sm.info} info)</small>
+  </div>`;
+  const items = checks.map(c =>
+    `<div class="check ${c.level}">
+      <span class="tag">${c.level.toUpperCase()}</span>${escapeHtml(c.title)}
+      ${c.detail ? `<div>${c.detail}</div>` : ''}
+    </div>`).join('');
+  return summaryEl + items;
+}
+
+document.getElementById('run').addEventListener('click', () => {
+  const text = document.getElementById('job').value;
+  const siever = document.getElementById('siever').value;
+  const out = document.getElementById('results');
+  if (!text.trim()) {
+    out.innerHTML = '<div class="check fail"><span class="tag">FAIL</span>No input — paste a result.job above.</div>';
+    return;
+  }
+  out.innerHTML = render(validate(text, siever));
+});
+
+document.getElementById('clear').addEventListener('click', () => {
+  document.getElementById('job').value = '';
+  document.getElementById('results').innerHTML = '';
+});
+</script>
+</body>
+</html>
