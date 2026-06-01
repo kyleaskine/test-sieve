@@ -96,9 +96,9 @@
 'use strict';
 
 const SIEVERS = {
-  '14e':  { limSumMax: 300_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
+  '14e':  { limSumMax: 210_000_000n, lpbMax: 32, lpbMaxIsHard: false  },
   '15e':  { limSumMax: 400_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
-  '15es': { limSumMax: 334_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
+  '15es': { limSumMax: 314_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
   '16es': { limSumMax: 450_000_000n, lpbMax: 35, lpbMaxIsHard: false }, // no documented sum cap; warn if lpb > 35
 };
 
@@ -325,6 +325,16 @@ function validate(text, sieverKey) {
     return /^-?\d+(\.\d+)?$/.test(v) ? parseFloat(v) : null;
   };
 
+  const nEntry = lookup['n'];
+  if (nEntry && /^-?\d+$/.test(nEntry.value)) {
+    const nDigits = nEntry.value.replace(/^-/, '').length;
+    checks.unshift({
+      level: 'info',
+      title: `n has ${nDigits} digit${nDigits === 1 ? '' : 's'}`,
+      detail: '',
+    });
+  }
+
   // ── Required fields ──
   const required = ['n', 'skew', 'Y0', 'Y1', 'rlim', 'alim', 'lpbr', 'lpba', 'mfbr', 'mfba', 'rlambda', 'alambda'];
   const missing = required.filter(k => !(k in lookup));
@@ -521,12 +531,16 @@ function render(checks) {
   const summaryEl = `<div class="summary ${sm.cls}">
     ${escapeHtml(sm.text)} &nbsp;<small>(${sm.pass} pass / ${sm.warn} warn / ${sm.fail} fail / ${sm.info} info)</small>
   </div>`;
-  const items = checks.map(c =>
+  const nDigitInfo = checks[0]?.level === 'info' && /^n has \d+ digits?$/.test(checks[0].title)
+    ? checks[0]
+    : null;
+  const renderCheck = c =>
     `<div class="check ${c.level}">
       <span class="tag">${c.level.toUpperCase()}</span>${escapeHtml(c.title)}
       ${c.detail ? `<div>${c.detail}</div>` : ''}
-    </div>`).join('');
-  return summaryEl + items;
+    </div>`;
+  const items = checks.slice(nDigitInfo ? 1 : 0).map(renderCheck).join('');
+  return (nDigitInfo ? renderCheck(nDigitInfo) : '') + summaryEl + items;
 }
 
 document.getElementById('run').addEventListener('click', () => {
