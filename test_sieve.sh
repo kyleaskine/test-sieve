@@ -96,6 +96,40 @@ if [ ! -f "$template" ]; then
     exit 1
 fi
 
+# ── Factor base cache ──
+# Current sievers auto-load <job>.afb.0 and trim it to each run's q-dependent
+# bound, so build the algebraic factor base once up front instead of once per
+# test point. "-c 0" builds and writes the full-alim factor base without
+# sieving anything. The cache only depends on the polynomial and alim, so it
+# survives lambda/mfb/lpb tweaks; the hash file triggers a rebuild when the
+# poly or alim change.
+afb_file="${template}.afb.0"
+afb_hash_file=".afb_params.sha256"
+if ! grep -aq "Trimmed cached aFB" "./$siever"; then
+    echo "Note: $siever predates factor-base cache support; removing any cache and proceeding without it."
+    rm -f "$afb_file" "$afb_hash_file"
+else
+    # The "v2-" salt ties the hash to the trailered cache format; bumping it
+    # forces regeneration of caches written by older sievers, which current
+    # binaries reject.
+    afb_hash="v2-$(grep -E '^(c[0-9]+|Y[01]|alim):' "$template" | tr -d '\r' | sha256sum | cut -d' ' -f1)"
+    if [ -f "$afb_file" ] && [ "$(cat "$afb_hash_file" 2>/dev/null)" = "$afb_hash" ]; then
+        echo "Using existing factor base cache ($afb_file)."
+    else
+        echo "Building factor base cache ($afb_file)..."
+        rm -f "$afb_file" "$afb_hash_file"
+        ./$siever -k -F -c 0 -f 1000 -o fbgen.tmp.out -n0 -a "$template"
+        rm -f fbgen.tmp.out
+        if [ -f "$afb_file" ]; then
+            echo "$afb_hash" > "$afb_hash_file"
+            echo "Factor base cache ready."
+        else
+            echo "Warning: cache generation failed; sievers will rebuild the factor base per run."
+        fi
+    fi
+fi
+echo ""
+
 # Hardcode qintsize
 qintsize=1000
 

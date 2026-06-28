@@ -18,7 +18,6 @@ cado_out.*
 cado_test_sieve.ini
 .fb_params.sha256
 
-# FB-cache test variant (until it replaces test_sieve.sh)
-test_sieve_new.sh
+# FB-cache variant
 *.afb.0
 .afb_params.sha256
