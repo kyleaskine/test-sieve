@@ -21,3 +21,7 @@ cado_test_sieve.ini
 # FB-cache variant
 *.afb.0
 .afb_params.sha256
+
+# Python
+__pycache__/
+*.pyc

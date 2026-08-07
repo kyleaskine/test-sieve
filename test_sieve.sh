@@ -26,14 +26,19 @@ read -p "Choose siever version [14/15/16]: " siever_choice
 case "$siever_choice" in
     14)
         siever="gnfs-lasieve4I14e"
+        ibits=14
         ;;
     16)
         siever="gnfs-lasieve4I16e"
+        ibits=16
         ;;
     15|*)
         siever="gnfs-lasieve4I15e"
+        ibits=15
         ;;
 esac
+# Sieve rectangle is 2^ibits x 2^jbits; J defaults to I/2.
+jbits=$((ibits - 1))
 
 # If siever 16, ask about expanded sieve size
 j_flag=""
@@ -41,6 +46,7 @@ if [ "$siever_choice" = "16" ]; then
     read -p "Use expanded sieve size (2^16x2^16 instead of 2^16x2^15)? [y/n]: " expand_choice
     if [ "$expand_choice" = "y" ] || [ "$expand_choice" = "Y" ]; then
         j_flag="-J 16"
+        jbits=16
     fi
 fi
 
@@ -133,11 +139,32 @@ echo ""
 # Hardcode qintsize
 qintsize=1000
 
+# ── Norm estimation ──
+# estimate_norms.py reports the average log2 norm on each side over the region
+# the siever actually covers for a given special-q, with log2(q) already
+# subtracted from whichever side carries the special q. Disabled silently if
+# python3 is unavailable.
+norms_enabled=false
+if command -v python3 >/dev/null 2>&1 && [ -f "estimate_norms.py" ]; then
+    if python3 ./estimate_norms.py "$template" --q 1000000 --ibits "$ibits" \
+        --jbits "$jbits" --sqside a --tsv >/dev/null 2>&1; then
+        norms_enabled=true
+    else
+        echo "Note: estimate_norms.py could not read $template; skipping norm estimates."
+    fi
+fi
+
+# Which side the tables' norms were computed for. The both-sides path resets
+# this per table; the single-side path keeps the side being sieved.
+if [ "$side_name" = "rational" ]; then norm_sq_side="r"; else norm_sq_side="a"; fi
+
 # Arrays to store results (generic, reused per side)
 declare -a q0_array expq_array specq_array yield_array nyld_array speed_array
+declare -a rnorm_array anorm_array
 # Side-specific arrays (used when sieve_both=true)
 declare -a r_yield_array r_nyld_array r_speed_array r_specq_array r_expq_array
 declare -a a_yield_array a_nyld_array a_speed_array a_specq_array a_expq_array
+declare -a r_rnorm_array r_anorm_array a_rnorm_array a_anorm_array
 
 # Determine which sides to run
 if [ "$sieve_both" = true ]; then
@@ -167,6 +194,7 @@ for run_side in "${sides_to_run[@]}"; do
 
     # Reset generic arrays for this side's run
     q0_array=(); expq_array=(); specq_array=(); yield_array=(); nyld_array=(); speed_array=()
+    rnorm_array=(); anorm_array=()
     index=0
 
     for current in "${q_points[@]}"; do
@@ -196,6 +224,17 @@ for run_side in "${sides_to_run[@]}"; do
         echo "$specq Special q"
         echo "Total yield: $yield"
         echo "($speed)"
+
+        rnorm=""; anorm=""
+        if [ "$norms_enabled" = true ]; then
+            read -r rnorm anorm _ < <(python3 ./estimate_norms.py "$template" \
+                --q "$current" --ibits "$ibits" --jbits "$jbits" \
+                --sqside "$run_side" --tsv 2>/dev/null)
+            if [ -n "$rnorm" ]; then
+                echo "Est. norms: rational ${rnorm} bits, algebraic ${anorm} bits" \
+                     "(special q on $cur_side_name side)"
+            fi
+        fi
         echo ""
 
         expq=$(echo "scale=3; $qintsize / l($current)" | bc -l)
@@ -212,6 +251,8 @@ for run_side in "${sides_to_run[@]}"; do
         yield_array[$index]=$yield
         nyld_array[$index]=$nyld
         speed_array[$index]="$speed"
+        rnorm_array[$index]="$rnorm"
+        anorm_array[$index]="$anorm"
         index=$((index + 1))
     done
 
@@ -223,12 +264,16 @@ for run_side in "${sides_to_run[@]}"; do
             r_speed_array=("${speed_array[@]}")
             r_specq_array=("${specq_array[@]}")
             r_expq_array=("${expq_array[@]}")
+            r_rnorm_array=("${rnorm_array[@]}")
+            r_anorm_array=("${anorm_array[@]}")
         else
             a_yield_array=("${yield_array[@]}")
             a_nyld_array=("${nyld_array[@]}")
             a_speed_array=("${speed_array[@]}")
             a_specq_array=("${specq_array[@]}")
             a_expq_array=("${expq_array[@]}")
+            a_rnorm_array=("${rnorm_array[@]}")
+            a_anorm_array=("${anorm_array[@]}")
         fi
     fi
 done
@@ -272,8 +317,18 @@ print_long_table() {
 
 # ── Helper: print the shortened table for current q0_array/yield_array/etc. ──
 print_short_table() {
-    printf "%-12s %-8s %-8s %-12s %-15s\n" "q0" "yield" "n-yld" "exp_rel" "speed"
-    printf "%-12s %-8s %-8s %-12s %-15s\n" "--------" "------" "------" "--------" "-----------"
+    local norm_hdr="" norm_sep=""
+    if [ "$norms_enabled" = true ]; then
+        # Star the side carrying the special q: its norm is smaller by log2(q).
+        # Without this the two tables in both-sides mode show identically
+        # labelled columns whose numbers differ by ~log2(q) with no explanation.
+        local rlbl="rat-bits" albl="alg-bits"
+        if [ "$norm_sq_side" = "r" ]; then rlbl="rat-bits*"; else albl="alg-bits*"; fi
+        norm_hdr=$(printf " %-9s %-9s" "$rlbl" "$albl")
+        norm_sep=$(printf " %-9s %-9s" "--------" "--------")
+    fi
+    printf "%-12s %-8s %-8s %-12s %-15s%s\n" "q0" "yield" "n-yld" "exp_rel" "speed" "$norm_hdr"
+    printf "%-12s %-8s %-8s %-12s %-15s%s\n" "--------" "------" "------" "--------" "-----------" "$norm_sep"
 
     local prev_nyld="" prev_q0="" total_exp_rel=0 total_time=0
     for i in "${!q0_array[@]}"; do
@@ -296,13 +351,16 @@ print_short_table() {
                 total_time=$(echo "scale=6; $total_time + $seg_time" | bc -l)
             fi
         fi
-        local nyld_fmt speed_fmt
+        local nyld_fmt speed_fmt norm_col=""
         nyld_fmt=$(printf "%.0f" "$nyld")
         speed_fmt=$(printf "%.3f rel/sec" "$speed_relsec")
+        if [ "$norms_enabled" = true ]; then
+            norm_col=$(printf " %-9s %-9s" "${rnorm_array[$i]}" "${anorm_array[$i]}")
+        fi
         if [ -n "$exp_rel" ]; then
-            printf "%-12s %-8s %-8s %-12s %-15s\n" "$q0" "$yield" "$nyld_fmt" "$(printf '%.0f' "$exp_rel")" "$speed_fmt"
+            printf "%-12s %-8s %-8s %-12s %-15s%s\n" "$q0" "$yield" "$nyld_fmt" "$(printf '%.0f' "$exp_rel")" "$speed_fmt" "$norm_col"
         else
-            printf "%-12s %-8s %-8s %-12s %-15s\n" "$q0" "$yield" "$nyld_fmt" "" "$speed_fmt"
+            printf "%-12s %-8s %-8s %-12s %-15s%s\n" "$q0" "$yield" "$nyld_fmt" "" "$speed_fmt" "$norm_col"
         fi
         prev_nyld="$nyld"; prev_q0="$q0"
     done
@@ -328,6 +386,11 @@ print_short_table() {
     else
         printf "%-12s %-8s %-8s %-12s\n" "" "" "Total:" "$total_exp_rel_fmt"
     fi
+    if [ "$norms_enabled" = true ]; then
+        local sq_full="algebraic"
+        [ "$norm_sq_side" = "r" ] && sq_full="rational"
+        echo "* special q on the $sq_full side; that side's norm is smaller by log2(q)."
+    fi
 }
 
 # ── Calculate suggested lambdas ──
@@ -345,6 +408,9 @@ if [ "$sieve_both" = true ]; then
     speed_array=("${r_speed_array[@]}")
     specq_array=("${r_specq_array[@]}")
     expq_array=("${r_expq_array[@]}")
+    rnorm_array=("${r_rnorm_array[@]}")
+    anorm_array=("${r_anorm_array[@]}")
+    norm_sq_side="r"
     print_short_table
     echo ""
 
@@ -354,6 +420,9 @@ if [ "$sieve_both" = true ]; then
     speed_array=("${a_speed_array[@]}")
     specq_array=("${a_specq_array[@]}")
     expq_array=("${a_expq_array[@]}")
+    rnorm_array=("${a_rnorm_array[@]}")
+    anorm_array=("${a_anorm_array[@]}")
+    norm_sq_side="a"
     print_short_table
     echo ""
 
@@ -438,6 +507,15 @@ if [ "$sieve_both" = true ]; then
     fi
     echo ""
 
+    if [ "$norms_enabled" = true ]; then
+        mid_q="${q0_array[$(( ${#q0_array[@]} / 2 ))]}"
+        echo "--- Norm balance (model) ---"
+        python3 ./estimate_norms.py "$template" --q "$mid_q" --ibits "$ibits" \
+            --jbits "$jbits" --no-siever-table 2>/dev/null \
+            | sed -n '/Special-q side comparison/,$p'
+        echo ""
+    fi
+
 else
     # ── Single-side path: original long table + shortened table ──
     print_long_table
@@ -460,6 +538,15 @@ else
     echo "--- Shortened Table ---"
     print_short_table
     echo ""
+
+    if [ "$norms_enabled" = true ]; then
+        mid_q="${q0_array[$(( ${#q0_array[@]} / 2 ))]}"
+        echo "--- Norm balance (model) ---"
+        python3 ./estimate_norms.py "$template" --q "$mid_q" --ibits "$ibits" \
+            --jbits "$jbits" --no-siever-table 2>/dev/null \
+            | sed -n '/Special-q side comparison/,$p'
+        echo ""
+    fi
 fi
 
 # ── result.job ──
