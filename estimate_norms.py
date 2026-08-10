@@ -501,10 +501,19 @@ class Model:
 
     def at_q(self, q, ibits, jbits, sq_side):
         """Mean norm bits on both sides, with log2(q) on the special-q side."""
-        rb, ab = self.samples(q, ibits, jbits)
-        mr, ma = sum(rb) / len(rb), sum(ab) / len(ab)
+        mr, ma = self.raw_at_q(q, ibits, jbits)
         lq = log2(int(q))
         return (mr - lq, ma) if sq_side == 'r' else (mr, ma - lq)
+
+    def raw_at_q(self, q, ibits, jbits):
+        """Mean norm bits before assigning/dividing out the special q.
+
+        These are the side-independent norms for the sampled sieve region.  A
+        special-q assignment turns them into the effective norms returned by
+        :meth:`at_q` by subtracting log2(q) from exactly one side.
+        """
+        rb, ab = self.samples(q, ibits, jbits)
+        return sum(rb) / len(rb), sum(ab) / len(ab)
 
     def yield_index(self, q, ibits, jbits, sq_side):
         """E[P_r * P_a] over the sampled region.  Comparable across runs.
@@ -570,11 +579,13 @@ def siever_table(model, sq_side, ibits_list=(11, 12, 13, 14, 15, 16)):
     side_name = 'rational' if sq_side == 'r' else 'algebraic'
     print(f"--- Norm Estimates by Siever (special q on the {side_name} side, "
           f"each at J=I/2) ---")
-    print(f"{'Siever':<20} {'q':>6} {'Rat bits':>9} {'Alg bits':>9} {'Alg-Rat':>8} "
+    print(f"{'Siever':<20} {'q':>6} {'Raw rat':>8} {'Raw alg':>8} "
+          f"{'Sq rat':>8} {'Sq alg':>8} {'Alg-Rat':>8} "
           f"{'yield idx':>11}  {'Best sq side':<12}")
-    print("-" * 82)
+    print("-" * 101)
     for ib in ibits_list:
         q, jb = siever_q(ib), ib - 1
+        raw_rb, raw_ab = model.raw_at_q(q, ib, jb)
         rb, ab = model.at_q(q, ib, jb, sq_side)
         idx = model.yield_index(q, ib, jb, sq_side)
         # Both sides reuse the same cached sample set, so this is nearly free.
@@ -586,20 +597,23 @@ def siever_table(model, sq_side, ibits_list=(11, 12, 13, 14, 15, 16)):
             else:
                 best = 'algebraic' if sq_side == 'r' else 'rational'
         print(f"{'gnfs-lasieve4I%de' % ib:<20} {'1e%d' % round(log10(q)):>6} "
-              f"{rb:>9.1f} {ab:>9.1f} {ab - rb:>+8.1f} {sci(idx):>11}  {best:<12}")
+              f"{raw_rb:>8.1f} {raw_ab:>8.1f} {rb:>8.1f} {ab:>8.1f} "
+              f"{ab - rb:>+8.1f} {sci(idx):>11}  {best:<12}")
 
 
 def per_q_table(model, qs, ibits, jbits, sq_side):
     side_name = 'rational' if sq_side == 'r' else 'algebraic'
     print(f"--- Norms per special-q  (I=2^{ibits}, J=2^{jbits}, special-q on the "
           f"{side_name} side) ---")
-    print(f"{'q':>14} {'rat bits':>9} {'alg bits':>9} {'Alg-Rat':>8} {'yield idx':>12}")
-    print("-" * 56)
+    print(f"{'q':>14} {'raw rat':>8} {'raw alg':>8} {'sq rat':>8} {'sq alg':>8} "
+          f"{'Alg-Rat':>8} {'yield idx':>12}")
+    print("-" * 78)
     for q in qs:
+        raw_rb, raw_ab = model.raw_at_q(q, ibits, jbits)
         rb, ab = model.at_q(q, ibits, jbits, sq_side)
         idx = model.yield_index(q, ibits, jbits, sq_side)
-        print(f"{int(q):>14,} {rb:>9.1f} {ab:>9.1f} {ab - rb:>+8.1f} "
-              f"{sci(idx):>12}")
+        print(f"{int(q):>14,} {raw_rb:>8.1f} {raw_ab:>8.1f} "
+              f"{rb:>8.1f} {ab:>8.1f} {ab - rb:>+8.1f} {sci(idx):>12}")
 
 
 def side_comparison(model, q, ibits, jbits):
@@ -607,6 +621,9 @@ def side_comparison(model, q, ibits, jbits):
           f"q = {int(q):,}) ---")
     print(f"  rational side: {model.rside.describe()}")
     print(f"  algebraic side: {model.aside.describe()}")
+    raw_rb, raw_ab = model.raw_at_q(q, ibits, jbits)
+    print(f"  raw norms (before special q): rational {raw_rb:.1f} bits, "
+          f"algebraic {raw_ab:.1f} bits")
     print()
     print(f"{'sq side':<12} {'rat bits':>9} {'alg bits':>9} {'yield idx':>12}")
     print("-" * 46)
@@ -684,6 +701,8 @@ def main():
                         help='Skip the by-siever survey table')
     parser.add_argument('--tsv', action='store_true',
                         help='Machine-readable: "rat_bits alg_bits yield_index"')
+    parser.add_argument('--raw-tsv', action='store_true',
+                        help='Machine-readable side-independent: "raw_rat_bits raw_alg_bits"')
     args = parser.parse_args()
 
     filename = args.job_file
@@ -717,6 +736,12 @@ def main():
         model.check()
     except ValueError as e:
         die(f"{filename}: {e}")
+
+    if args.raw_tsv:
+        q = args.q if args.q is not None else siever_q(ibits)
+        raw_rb, raw_ab = model.raw_at_q(q, ibits, jbits)
+        print("%.1f %.1f" % (raw_rb, raw_ab))
+        return
 
     if args.tsv:
         q = args.q if args.q is not None else siever_q(ibits)

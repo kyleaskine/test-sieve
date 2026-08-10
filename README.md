@@ -46,8 +46,9 @@ carries the special q and how the large-prime parameters are set.
 - If no file is specified, defaults to `input.job`
 - `--ibits` is the siever I value (15 for `gnfs-lasieve4I15e`); `--jbits`
   defaults to `ibits-1`, so pass `--jbits 16` when sieving I16 with `-J 16`
-- Norms shrink by `log2(q)` bits on whichever side carries the special q, so
-  they depend on `--sqside`
+- `Raw rat`/`Raw alg` are the side-independent norms before choosing which
+  side carries the special q. `Sq rat`/`Sq alg` are the effective norms after
+  subtracting `log2(q)` from the side selected by `--sqside`.
 
 **Norms vs. yield -- two separate layers.** The norm depends only on the
 polynomials, skew, `I`/`J`, `q`, and which side carries `q`. `lpb`, `mfb`,
@@ -64,15 +65,16 @@ I16), so you are not reading a single arbitrary q. Skip it with
 
 ```
 --- Norm Estimates by Siever (special q on the algebraic side) ---
-Siever                    q  Rat bits  Alg bits  Alg-Rat   yield idx  Best sq side
-----------------------------------------------------------------------------------
-gnfs-lasieve4I14e       1e7     160.2     120.9    -39.3    1.06e-06  algebraic
-gnfs-lasieve4I15e       1e8     162.9     133.7    -29.2    2.71e-07  algebraic
-gnfs-lasieve4I16e       1e9     165.6     146.2    -19.4    6.44e-08  algebraic
+Siever                    q  Raw rat  Raw alg   Sq rat   Sq alg  Alg-Rat   yield idx  Best sq side
+-----------------------------------------------------------------------------------------------------
+gnfs-lasieve4I14e       1e7    160.2    144.2    160.2    120.9    -39.3    1.06e-06  algebraic
+gnfs-lasieve4I15e       1e8    162.9    160.3    162.9    133.7    -29.2    2.71e-07  algebraic
+gnfs-lasieve4I16e       1e9    165.6    176.1    165.6    146.2    -19.4    6.44e-08  algebraic
 
 --- Special-q side comparison (I=2^16, J=2^15, q = 1,000,000,000) ---
   rational side: 3LP, cofactor <= 89 bits
   algebraic side: 2LP, cofactor <= 59 bits
+  raw norms (before special q): rational 165.6 bits, algebraic 176.1 bits
 
 sq side       rat bits  alg bits    yield idx
 ----------------------------------------------
@@ -126,8 +128,9 @@ The script will prompt for:
 **Outputs:**
 - Detailed sieve statistics for each q0 value
 - Expected relation counts (exp_rel)
-- Estimated `rat-bits`/`alg-bits` per q0, via `estimate_norms.py` (skipped
-  silently if `python3` is unavailable)
+- Side-independent `raw-rat`/`raw-alg` norms per q0, via
+  `estimate_norms.py` (skipped if `python3` is unavailable). Run the estimator
+  directly for the full special-q-adjusted comparison.
 - Suggested lambda values
 - Creates `result.job` with optimal parameters
 
