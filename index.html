@@ -16,8 +16,9 @@
   h1 { font-size: 1.3em; margin-bottom: 0.3em; }
   .subtitle { color: #666; margin-top: 0; margin-bottom: 1.5em; }
   label { display: block; margin: 0.75em 0 0.25em; font-weight: bold; }
-  select, textarea, button { font: inherit; box-sizing: border-box; }
-  select { padding: 0.3em; }
+  select, input, textarea, button { font: inherit; box-sizing: border-box; }
+  select, input { padding: 0.3em; }
+  input[type=number] { width: 5em; }
   textarea { width: 100%; height: 320px; padding: 0.5em; }
   button { padding: 0.5em 1.2em; margin: 0.75em 0.4em 0.75em 0; cursor: pointer; }
   .results { margin-top: 1em; }
@@ -82,7 +83,11 @@
   <option value="15e" selected>15e</option>
   <option value="15es">15es</option>
   <option value="16es">16es</option>
+  <option value="cs">cs</option>
 </select>
+
+<label for="area">log2(sieve area) <small>— for the norm estimates; set from the queue, override if needed</small></label>
+<input id="area" type="number" min="20" max="40" step="1" value="29">
 
 <label for="job">Paste contents of result.job</label>
 <textarea id="job" placeholder="n: 12345...&#10;skew: ...&#10;c0: ...&#10;..." spellcheck="false"></textarea>
@@ -95,12 +100,16 @@
 <script>
 'use strict';
 
+// areaBits is the default log2(sieve area) for the norm estimates; the page's box can override it.
 const SIEVERS = {
-  '14e':  { limSumMax: 210_000_000n, lpbMax: 32, lpbMaxIsHard: false  },
-  '15e':  { limSumMax: 400_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
-  '15es': { limSumMax: 314_000_000n, lpbMax: 33, lpbMaxIsHard: true  },
-  '16es': { limSumMax: 450_000_000n, lpbMax: 35, lpbMaxIsHard: false }, // no documented sum cap; warn if lpb > 35
+  '14e':  { limSumMax: 210_000_000n, lpbMax: 32, lpbMaxIsHard: false, usesLambda: true,  areaBits: 27 },
+  '15e':  { limSumMax: 400_000_000n, lpbMax: 33, lpbMaxIsHard: true,  usesLambda: true,  areaBits: 29 },
+  '15es': { limSumMax: 314_000_000n, lpbMax: 33, lpbMaxIsHard: true,  usesLambda: true,  areaBits: 29 },
+  '16es': { limSumMax: 450_000_000n, lpbMax: 35, lpbMaxIsHard: false, usesLambda: true,  areaBits: 31 }, // no documented sum cap; warn if lpb > 35
+  'cs':   { limSumMax: 500_000_000n, lpbMax: 35, lpbMaxIsHard: false, usesLambda: false, areaBits: 31 }, // cudasieve; ignores lambda
 };
+
+const NORM_QS = [30_000_000, 100_000_000, 350_000_000, 1_000_000_000];
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -172,6 +181,85 @@ function log2BigInt(n) {
   return Math.log2(top) + (s.length - take);
 }
 
+// ── Raw norm estimate: a port of sample_region() in estimate_norms.py ──
+
+function log2AbsBigInt(n) {
+  if (n < 0n) n = -n;
+  const x = Number(n);
+  return Number.isFinite(x) ? Math.log2(x) : log2BigInt(n);
+}
+
+// Homogeneous F(a,b), coeffs highest degree first; exact so near-cancellation isn't lost.
+function evalHomogeneous(coeffs, a, b) {
+  let v = coeffs[0];
+  let bp = 1n;
+  for (let k = 1; k < coeffs.length; k++) {
+    bp *= b;
+    v = v * a + coeffs[k] * bp;
+  }
+  return v;
+}
+
+function gcdInt(x, y) {
+  while (y) [x, y] = [y, x % y];
+  return x;
+}
+
+// Seeded PRNG so re-validating the same job gives the same numbers.
+function mulberry32(seed) {
+  return () => {
+    seed = (seed + 0x6D2B79F5) | 0;
+    let t = seed;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// Gauss-reduce the q-lattice {(a,b) : a = r*b mod q} in the skewed metric, as the siever does.
+function reduceQLattice(q, r, skew) {
+  const rs = Math.sqrt(skew);
+  const dot = (u, v) => (u[0] / rs) * (v[0] / rs) + (u[1] * rs) * (v[1] * rs);
+  let u = [q, 0], v = [r, 1];
+  for (let it = 0; it < 200; it++) {
+    if (dot(u, u) > dot(v, v)) [u, v] = [v, u];
+    const du = dot(u, u);
+    if (du === 0) break;
+    const m = Math.round(dot(u, v) / du);
+    if (m === 0) break;
+    v = [v[0] - m * u[0], v[1] - m * u[1]];
+  }
+  return [u, v];
+}
+
+// Mean log2 norms [rat, alg] over the (i,j) region at special-q q, before dividing out q.
+function estimateRawNorms(alg, rat, skew, q, ibits, jbits, nlat = 200, npts = 120, seed = 12345) {
+  const rand = mulberry32(seed);
+  const randInt = (lo, hi) => lo + Math.floor(rand() * (hi - lo));
+  const I = 2 ** ibits, J = 2 ** jbits;
+  let sumR = 0, sumA = 0, count = 0;
+  for (let l = 0; l < nlat; l++) {
+    const [u, v] = reduceQLattice(q, randInt(0, q), skew);
+    const u0 = BigInt(u[0]), u1 = BigInt(u[1]), v0 = BigInt(v[0]), v1 = BigInt(v[1]);
+    for (let p = 0; p < npts; p++) {
+      const i = randInt(-I / 2, I / 2);
+      const j = randInt(1, J + 1);
+      if (gcdInt(Math.abs(i), j) !== 1) continue; // siever skips non-primitive (i,j)
+      const bi = BigInt(i), bj = BigInt(j);
+      const a = bi * u0 + bj * v0;
+      const b = bi * u1 + bj * v1;
+      if (b === 0n) continue;
+      const na = evalHomogeneous(alg, a, b);
+      const nr = evalHomogeneous(rat, a, b);
+      if (na === 0n || nr === 0n) continue;
+      sumA += log2AbsBigInt(na);
+      sumR += log2AbsBigInt(nr);
+      count++;
+    }
+  }
+  return count ? [sumR / count, sumA / count] : null;
+}
+
 function parseKV(line) {
   const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)([ \t]*):([ \t]*)(.*?)([ \t]*)$/);
   if (!m) return null;
@@ -197,7 +285,7 @@ function buildFixedSkew(originalText, lines, nLineIdx, skewLineIdx) {
   return result.join(eol);
 }
 
-function validate(text, sieverKey) {
+function validate(text, sieverKey, areaBits) {
   const checks = [];
   const add = (level, title, detail) => checks.push({ level, title, detail });
   const siever = SIEVERS[sieverKey];
@@ -336,7 +424,8 @@ function validate(text, sieverKey) {
   }
 
   // ── Required fields ──
-  const required = ['n', 'skew', 'Y0', 'Y1', 'rlim', 'alim', 'lpbr', 'lpba', 'mfbr', 'mfba', 'rlambda', 'alambda'];
+  const required = ['n', 'skew', 'Y0', 'Y1', 'rlim', 'alim', 'lpbr', 'lpba', 'mfbr', 'mfba'];
+  if (siever.usesLambda) required.push('rlambda', 'alambda');
   const missing = required.filter(k => !(k in lookup));
   const cKeys = Object.keys(lookup).filter(k => /^c\d+$/.test(k));
   if (cKeys.length < 2) missing.push('c0..cN (algebraic poly coefficients)');
@@ -428,10 +517,13 @@ function validate(text, sieverKey) {
   }
 
   // ── lambda window: [calc - 0.05, calc + 0.25], calc = mfb / log2(lim) ──
-  for (const [limKey, mfbKey, lambdaKey] of [
+  if (!siever.usesLambda && ('rlambda' in lookup || 'alambda' in lookup)) {
+    add('info', `Lambdas are ignored by ${sieverKey}`, 'rlambda/alambda not checked.');
+  }
+  for (const [limKey, mfbKey, lambdaKey] of siever.usesLambda ? [
     ['rlim', 'mfbr', 'rlambda'],
     ['alim', 'mfba', 'alambda'],
-  ]) {
+  ] : []) {
     const lim = getNum(limKey);
     const mfb = getNum(mfbKey);
     const lam = getFloat(lambdaKey);
@@ -508,6 +600,26 @@ function validate(text, sieverKey) {
     }
   }
 
+  // ── Raw norms (before dividing out the special q, so independent of sieve side) ──
+  const skew = lookup['skew'] ? Number(lookup['skew'].value) : NaN;
+  const cDegs = Object.keys(lookup).map(k => k.match(/^c(\d+)$/)).filter(Boolean).map(cm => parseInt(cm[1], 10));
+  if (Y0 !== null && Y1 !== null && skew > 0 && cDegs.length >= 2) {
+    const alg = [];
+    for (let d = Math.max(...cDegs); d >= 0; d--) alg.push(('c' + d) in lookup ? getNum('c' + d) : 0n);
+    if (!alg.includes(null) && alg.some(c => c !== 0n)) {
+      // Split with I >= J, matching the sievers: 29 -> 2^15 x 2^14, 32 -> 2^16 x 2^16.
+      const ibits = Math.ceil(areaBits / 2), jbits = Math.floor(areaBits / 2);
+      const rows = [];
+      for (const q of NORM_QS) {
+        const est = estimateRawNorms(alg, [Y1, Y0], skew, q, ibits, jbits);
+        const qLabel = q >= 1e9 ? `${q / 1e9}B` : `${q / 1e6}M`;
+        rows.push(`${qLabel.padEnd(6)} ${est ? est[0].toFixed(1).padStart(8) : '     n/a'} ${est ? est[1].toFixed(1).padStart(8) : '     n/a'}`);
+      }
+      add('info', `Estimated raw norms (log2, sieve area 2^${areaBits} = 2^${ibits} × 2^${jbits})`,
+        `<pre>${escapeHtml(['q       raw rat  raw alg', ...rows].join('\n'))}</pre>`);
+    }
+  }
+
   return checks;
 }
 
@@ -546,12 +658,21 @@ function render(checks) {
 document.getElementById('run').addEventListener('click', () => {
   const text = document.getElementById('job').value;
   const siever = document.getElementById('siever').value;
+  const areaEl = document.getElementById('area');
   const out = document.getElementById('results');
   if (!text.trim()) {
     out.innerHTML = '<div class="check fail"><span class="tag">FAIL</span>No input — paste a result.job above.</div>';
     return;
   }
-  out.innerHTML = render(validate(text, siever));
+  // Fall back to the queue default on a bad entry, and show it in the box so it's clear what was used.
+  const areaVal = Number(areaEl.value);
+  const areaBits = Number.isInteger(areaVal) && areaVal >= 20 && areaVal <= 40 ? areaVal : SIEVERS[siever].areaBits;
+  areaEl.value = areaBits;
+  out.innerHTML = render(validate(text, siever, areaBits));
+});
+
+document.getElementById('siever').addEventListener('change', e => {
+  document.getElementById('area').value = SIEVERS[e.target.value].areaBits;
 });
 
 document.getElementById('clear').addEventListener('click', () => {
